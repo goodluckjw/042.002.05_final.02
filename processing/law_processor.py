@@ -1,4 +1,5 @@
-import requests
+
+import requests 
 import xml.etree.ElementTree as ET
 from urllib.parse import quote
 import re
@@ -39,6 +40,82 @@ def get_law_text_by_mst(mst):
 
 def clean(text):
     return re.sub(r"\s+", "", text or "")
+
+def highlight(text, keyword):
+    return text.replace(keyword, f"<span style='color:red'>{keyword}</span>") if text else ""
+
+def run_search_logic(query, unit):
+    result_dict = {}
+    keyword_clean = clean(query)
+    for law in get_law_list_from_api(query):
+        mst = law["MST"]
+        xml_data = get_law_text_by_mst(mst)
+        if not xml_data:
+            continue
+
+        tree = ET.fromstring(xml_data)
+        articles = tree.findall(".//조문단위")
+        law_results = []
+        for article in articles:
+            조내용 = article.findtext("조문내용") or ""
+            항들 = article.findall("항")
+            출력덩어리 = []
+            조출력됨 = False
+            첫항출력됨 = False
+            첫항내용텍스트 = ""
+
+            if keyword_clean in clean(조내용):
+                출력덩어리.append(highlight(조내용, query))
+                조출력됨 = True
+
+            for 항 in 항들:
+                항내용 = 항.findtext("항내용", "") or ""
+                항출력 = keyword_clean in clean(항내용)
+                항덩어리 = []
+                호출력됨 = False
+
+                for 호 in 항.findall("호"):
+                    호내용 = 호.findtext("호내용", "") or ""
+                    if keyword_clean in clean(호내용):
+                        if not 항출력:
+                            항덩어리.append(highlight(항내용, query))
+                            항출력 = True
+                        항덩어리.append("&nbsp;&nbsp;" + highlight(호내용, query))
+                        호출력됨 = True
+
+                    for 목 in 호.findall("목"):
+                        목내용_list = 목.findall("목내용")
+                        if 목내용_list:
+                            combined_lines = []
+                            for m in 목내용_list:
+                                line = (m.text or "").replace("<![CDATA[", "").replace("]]>", "").strip()
+                                if line:
+                                    combined_lines.append(highlight(line, query))
+                            if combined_lines:
+                                if not 항출력:
+                                    항덩어리.append(highlight(항내용, query))
+                                    항출력 = True
+                                if not 호출력됨:
+                                    항덩어리.append("&nbsp;&nbsp;" + highlight(호내용, query))
+                                    호출력됨 = True
+                                항덩어리.append("<br>".join(["&nbsp;&nbsp;&nbsp;&nbsp;" + line for line in combined_lines]))
+
+                if 항출력:
+                    if not 조출력됨 and not 첫항출력됨:
+                        출력덩어리.append(highlight(조내용, query) + " " + highlight(항내용, query))
+                        첫항내용텍스트 = 항내용.strip()
+                        첫항출력됨 = True
+                        조출력됨 = True
+                    elif 항내용.strip() != 첫항내용텍스트:
+                        출력덩어리.append(highlight(항내용, query))
+                    출력덩어리.extend(항덩어리)
+
+            if 출력덩어리:
+                law_results.append("<br>".join(출력덩어리))
+
+        if law_results:
+            result_dict[law["법령명"]] = law_results
+    return result_dict
 
 def extract_locations(xml_data, keyword):
     tree = ET.fromstring(xml_data)
